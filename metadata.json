@@ -1,0 +1,6 @@
+{
+  "name": "AttendFlow - Sistem Absensi Wajah",
+  "description": "Aplikasi absensi modern berbasis pengenalan wajah dengan antarmuka bersih dan responsif.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}
