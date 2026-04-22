@@ -23,7 +23,11 @@ import {
   Search,
   Lock,
   Unlock,
-  ShieldAlert
+  ShieldAlert,
+  MapPin,
+  Save,
+  KeyRound,
+  LogIn
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as faceapi from 'face-api.js';
@@ -40,9 +44,10 @@ import {
 import { Bar } from 'react-chartjs-2';
 
 // GPS Constants
-const SCHOOL_LAT = -7.350580;
-const SCHOOL_LNG = 108.217163;
+const DEFAULT_SCHOOL_LAT = -7.350580;
+const DEFAULT_SCHOOL_LNG = 108.217163;
 const MAX_DISTANCE_METERS = 100;
+const ADMIN_PIN_DEFAULT = "12345";
 
 // Haversine formula to calculate distance between two coordinates in meters
 const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -111,6 +116,18 @@ export default function App() {
   const [topMessage, setTopMessage] = useState<string | null>(null);
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showAdminAuthModal, setShowAdminAuthModal] = useState(false);
+  const [adminPinInput, setAdminPinInput] = useState('');
+  const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
+
+  const [schoolLocation, setSchoolLocation] = useState<{lat: number, lng: number}>(() => {
+    const saved = localStorage.getItem('attendflow_school_location');
+    return saved ? JSON.parse(saved) : { lat: DEFAULT_SCHOOL_LAT, lng: DEFAULT_SCHOOL_LNG };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('attendflow_school_location', JSON.stringify(schoolLocation));
+  }, [schoolLocation]);
 
   // Components
   const Navbar = () => (
@@ -152,7 +169,15 @@ export default function App() {
           <div className="h-6 w-px bg-slate-200 mx-2" />
           
           <button 
-            onClick={() => setIsAdminMode(!isAdminMode)}
+            onClick={() => {
+              if (isAdminMode) {
+                setIsAdminMode(false);
+              } else {
+                setAdminPinInput('');
+                setAdminAuthError(null);
+                setShowAdminAuthModal(true);
+              }
+            }}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all duration-300 font-bold text-sm ${
               isAdminMode 
                 ? 'bg-emerald-900 text-white shadow-lg shadow-emerald-950/20' 
@@ -208,6 +233,44 @@ export default function App() {
   );
 
   const Dashboard = () => {
+    const [editLoc, setEditLoc] = useState({ lat: schoolLocation.lat, lng: schoolLocation.lng });
+    const [isSavingLoc, setIsSavingLoc] = useState(false);
+    const [isGettingCurrentLoc, setIsGettingCurrentLoc] = useState(false);
+
+    const handleSaveLocation = () => {
+      setIsSavingLoc(true);
+      setSchoolLocation(editLoc);
+      setTimeout(() => {
+        setIsSavingLoc(false);
+        setTopMessage("Lokasi sekolah berhasil diperbarui!");
+        setTimeout(() => setTopMessage(null), 3000);
+      }, 800);
+    };
+
+    const handleSetCurrentLocation = () => {
+      if (!navigator.geolocation) {
+        alert("Geolokasi tidak didukung oleh browser Anda.");
+        return;
+      }
+      setIsGettingCurrentLoc(true);
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const newLoc = { lat: position.coords.latitude, lng: position.coords.longitude };
+          setEditLoc(newLoc);
+          setSchoolLocation(newLoc);
+          setIsGettingCurrentLoc(false);
+          setTopMessage(`Lokasi diatur ke posisi Anda saat ini!`);
+          setTimeout(() => setTopMessage(null), 3000);
+        },
+        (err) => {
+          console.error(err);
+          setIsGettingCurrentLoc(false);
+          alert("Gagal mengambil lokasi. Pastikan izin GPS aktif.");
+        },
+        { enableHighAccuracy: true }
+      );
+    };
+
     // Process chart data
     const getChartData = () => {
       if (logs.length === 0) return null;
@@ -336,6 +399,66 @@ export default function App() {
           </div>
         </div>
 
+        {isAdminMode && (
+          <div className="bg-white p-8 rounded-3xl border border-emerald-100 shadow-sm">
+            <h2 className="text-xl font-bold text-emerald-900 mb-6 flex items-center gap-2">
+              <MapPin className="text-emerald-600" size={24} />
+              Pengaturan Lokasi GPS Sekolah
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest pl-1">Latitude</label>
+                    <input 
+                      type="number" 
+                      step="any"
+                      value={editLoc.lat}
+                      onChange={(e) => setEditLoc(prev => ({ ...prev, lat: parseFloat(e.target.value) }))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest pl-1">Longitude</label>
+                    <input 
+                      type="number" 
+                      step="any"
+                      value={editLoc.lng}
+                      onChange={(e) => setEditLoc(prev => ({ ...prev, lng: parseFloat(e.target.value) }))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <button 
+                    onClick={handleSaveLocation}
+                    disabled={isSavingLoc}
+                    className="flex-1 bg-emerald-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all disabled:opacity-50"
+                  >
+                    {isSavingLoc ? <RefreshCcw size={18} className="animate-spin" /> : <Save size={18} />}
+                    Simpan Koordinat
+                  </button>
+                  <button 
+                    onClick={handleSetCurrentLocation}
+                    disabled={isGettingCurrentLoc}
+                    className="flex-1 bg-slate-800 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-slate-900 transition-all disabled:opacity-50"
+                  >
+                    {isGettingCurrentLoc ? <RefreshCcw size={18} className="animate-spin" /> : <MapPin size={18} />}
+                    Set Lokasi Saya Sekarang
+                  </button>
+                </div>
+              </div>
+              <div className="bg-emerald-50/50 rounded-2xl p-5 border border-emerald-100 flex flex-col justify-center">
+                <p className="text-xs text-emerald-800 font-medium leading-relaxed">
+                  <span className="font-bold">Info:</span> Anda dapat menentukan titik pusat absensi. 
+                  Gunakan tombol <span className="font-bold italic text-emerald-900">"Set Lokasi Saya Sekarang"</span> saat meresmikan titik absensi di tengah gedung/sekolah. 
+                  Radius absensi akan dihitung 100m dari titik ini.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
           <h2 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2">
@@ -430,7 +553,7 @@ export default function App() {
         (position) => {
           const { latitude, longitude } = position.coords;
           setUserLocation({ lat: latitude, lng: longitude });
-          const dist = calculateDistance(latitude, longitude, SCHOOL_LAT, SCHOOL_LNG);
+          const dist = calculateDistance(latitude, longitude, schoolLocation.lat, schoolLocation.lng);
           setDistanceToSchool(dist);
           setIsLocating(false);
         },
@@ -1379,6 +1502,90 @@ export default function App() {
       </AnimatePresence>
       <Navbar />
       
+      {/* Admin Auth Modal */}
+      <AnimatePresence>
+        {showAdminAuthModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAdminAuthModal(false)}
+              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white w-full max-w-md rounded-[2.5rem] p-10 relative z-10 shadow-2xl overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 p-6">
+                <button onClick={() => setShowAdminAuthModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="text-center space-y-6">
+                <div className="bg-emerald-50 w-20 h-20 rounded-3xl flex items-center justify-center text-emerald-600 mx-auto">
+                  <KeyRound size={40} />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900">Autentikasi Admin</h2>
+                  <p className="text-slate-500 text-sm mt-1">Masukkan PIN untuk masuk ke Mode Admin</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="relative">
+                    <LogIn size={20} className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input 
+                      type="password"
+                      placeholder="Masukkan PIN Admin (default: 12345)"
+                      value={adminPinInput}
+                      onChange={(e) => {
+                        setAdminPinInput(e.target.value);
+                        setAdminAuthError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          if (adminPinInput === ADMIN_PIN_DEFAULT) {
+                            setIsAdminMode(true);
+                            setShowAdminAuthModal(false);
+                            setTopMessage("Login Admin Berhasil!");
+                            setTimeout(() => setTopMessage(null), 3000);
+                          } else {
+                            setAdminAuthError("PIN yang Anda masukkan salah.");
+                          }
+                        }
+                      }}
+                      className="w-full bg-slate-100 border-0 focus:ring-2 focus:ring-emerald-500 rounded-2xl py-4 pl-14 pr-4 transition-all font-mono text-center tracking-[0.5em] text-lg font-bold"
+                    />
+                  </div>
+                  {adminAuthError && (
+                    <p className="text-red-500 text-xs font-bold animate-bounce">{adminAuthError}</p>
+                  ) }
+                  
+                  <button 
+                    onClick={() => {
+                      if (adminPinInput === ADMIN_PIN_DEFAULT) {
+                        setIsAdminMode(true);
+                        setShowAdminAuthModal(false);
+                        setTopMessage("Login Admin Berhasil!");
+                        setTimeout(() => setTopMessage(null), 3000);
+                      } else {
+                        setAdminAuthError("PIN yang Anda masukkan salah.");
+                      }
+                    }}
+                    className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-600/20"
+                  >
+                    Masuk Mode Admin
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {isAdminMode && (
           <motion.div
