@@ -713,33 +713,43 @@ export default function App() {
           const displaySize = { width: video.videoWidth, height: video.videoHeight };
           faceapi.matchDimensions(canvas, displaySize);
 
-          const detection = await faceapi
-            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+          // Use more robust detection options for mobile and varied lighting
+          const detectorOptions = new faceapi.TinyFaceDetectorOptions({
+            inputSize: 416, // Better detail for identification
+            scoreThreshold: 0.4 // More sensitive detection
+          });
+
+          // Detect all faces first (faster, more robust for "is face detected" check)
+          const detections = await faceapi.detectAllFaces(video, detectorOptions)
             .withFaceLandmarks()
-            .withFaceDescriptor();
+            .withFaceDescriptors();
           
-          setIsFaceDetected(!!detection);
+          const hasFaces = detections.length > 0;
+          setIsFaceDetected(hasFaces);
 
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            if (detection && !capturedImage && !scanResult) {
-              const resizedBox = faceapi.resizeResults(detection, displaySize).detection.box;
+            if (hasFaces && !capturedImage && !scanResult) {
+              // Take the first/largest face for identification
+              const bestDet = detections[0];
+              const resizedBox = faceapi.resizeResults(bestDet, displaySize).detection.box;
               
               // Draw Box
-              ctx.strokeStyle = '#34d399'; // emerald-400
+              const isMatch = !!identifiedUser;
+              ctx.strokeStyle = isMatch ? '#10b981' : '#34d399'; 
               ctx.lineWidth = 4;
               ctx.strokeRect(resizedBox.x, resizedBox.y, resizedBox.width, resizedBox.height);
               
-              // Matching
+              // Matching Logic
               let bestMatch: RegisteredUser | null = null;
               let minDistance = 1.0;
 
-              if (users.length > 0 && detection.descriptor) {
+              if (users.length > 0 && bestDet.descriptor) {
                 users.forEach(u => {
                   if (u.descriptor) {
-                    const dist = faceapi.euclideanDistance(detection.descriptor, u.descriptor);
+                    const dist = faceapi.euclideanDistance(bestDet.descriptor, new Float32Array(u.descriptor));
                     if (dist < minDistance) {
                       minDistance = dist;
                       bestMatch = u;
@@ -748,16 +758,19 @@ export default function App() {
                 });
               }
 
+              // Apply matching threshold
               if (bestMatch && minDistance < 0.6) {
-                setIdentifiedUser(bestMatch);
-                ctx.fillStyle = '#34d399';
-                ctx.font = 'bold 16px Inter, sans-serif';
-                ctx.fillText(bestMatch.name, resizedBox.x, resizedBox.y - 10);
+                if (identifiedUser?.id !== (bestMatch as RegisteredUser).id) {
+                  setIdentifiedUser(bestMatch);
+                }
+                ctx.fillStyle = '#10b981';
+                ctx.font = 'bold 20px Inter, sans-serif';
+                ctx.fillText((bestMatch as RegisteredUser).name, resizedBox.x, resizedBox.y - 15);
               } else {
-                setIdentifiedUser(null);
+                if (identifiedUser !== null) setIdentifiedUser(null);
               }
             } else {
-              setIdentifiedUser(null);
+              if (identifiedUser !== null) setIdentifiedUser(null);
             }
           }
         };
