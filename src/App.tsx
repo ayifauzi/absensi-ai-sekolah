@@ -697,73 +697,87 @@ export default function App() {
       getGPSLocation(); // Fetch location on mount
     }, []);
 
-    const handleVideoPlay = () => {
-      if (!videoRef.current || !overlayCanvasRef.current || !modelsLoaded) return;
-
-      const video = videoRef.current;
-      const canvas = overlayCanvasRef.current;
+    useEffect(() => {
+      let interval: NodeJS.Timeout;
       
-      const displaySize = { width: video.videoWidth, height: video.videoHeight };
-      faceapi.matchDimensions(canvas, displaySize);
-
-      const detectionInterval = setInterval(async () => {
-        if (video.paused || video.ended || !modelsLoaded) return;
-
-        // Use detectSingleFace with features for recognition
-        const detection = await faceapi
-          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-          .withFaceLandmarks()
-          .withFaceDescriptor();
+      if (modelsLoaded && stream && videoRef.current && overlayCanvasRef.current) {
+        const video = videoRef.current;
+        const canvas = overlayCanvasRef.current;
         
-        setIsFaceDetected(!!detection);
-
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const runDetection = async () => {
+          if (!video || video.paused || video.ended || !modelsLoaded || capturedImage || scanResult) return;
           
-          if (detection && !capturedImage && !scanResult) {
-            const { x, y, width, height } = detection.detection.box;
-            const resizedBox = faceapi.resizeResults(detection, displaySize).detection.box;
-            
-            // Draw Box
-            ctx.strokeStyle = '#34d399'; // emerald-400
-            ctx.lineWidth = 4;
-            ctx.strokeRect(resizedBox.x, resizedBox.y, resizedBox.width, resizedBox.height);
-            
-            // Euclidean Distance Matching
-            let bestMatch: RegisteredUser | null = null;
-            let minDistance = 1.0;
+          // Ensure video dimensions are available
+          if (video.videoWidth === 0) return;
 
-            if (users.length > 0 && detection.descriptor) {
-              users.forEach(u => {
-                if (u.descriptor) {
-                  const dist = faceapi.euclideanDistance(detection.descriptor, u.descriptor);
-                  if (dist < minDistance) {
-                    minDistance = dist;
-                    bestMatch = u;
-                  }
-                }
-              });
-            }
+          const displaySize = { width: video.videoWidth, height: video.videoHeight };
+          faceapi.matchDimensions(canvas, displaySize);
 
-            if (bestMatch && minDistance < 0.6) {
-              console.log(`Match found: ${bestMatch.name} (dist: ${minDistance.toFixed(4)})`);
-              setIdentifiedUser(bestMatch);
+          const detection = await faceapi
+            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+          
+          setIsFaceDetected(!!detection);
+
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (detection && !capturedImage && !scanResult) {
+              const resizedBox = faceapi.resizeResults(detection, displaySize).detection.box;
               
-              // Draw text on canvas
-              ctx.fillStyle = '#34d399';
-              ctx.font = 'bold 16px Inter, sans-serif';
-              ctx.fillText(bestMatch.name, resizedBox.x, resizedBox.y - 10);
+              // Draw Box
+              ctx.strokeStyle = '#34d399'; // emerald-400
+              ctx.lineWidth = 4;
+              ctx.strokeRect(resizedBox.x, resizedBox.y, resizedBox.width, resizedBox.height);
+              
+              // Matching
+              let bestMatch: RegisteredUser | null = null;
+              let minDistance = 1.0;
+
+              if (users.length > 0 && detection.descriptor) {
+                users.forEach(u => {
+                  if (u.descriptor) {
+                    const dist = faceapi.euclideanDistance(detection.descriptor, u.descriptor);
+                    if (dist < minDistance) {
+                      minDistance = dist;
+                      bestMatch = u;
+                    }
+                  }
+                });
+              }
+
+              if (bestMatch && minDistance < 0.6) {
+                setIdentifiedUser(bestMatch);
+                ctx.fillStyle = '#34d399';
+                ctx.font = 'bold 16px Inter, sans-serif';
+                ctx.fillText(bestMatch.name, resizedBox.x, resizedBox.y - 10);
+              } else {
+                setIdentifiedUser(null);
+              }
             } else {
               setIdentifiedUser(null);
             }
-          } else {
-            setIdentifiedUser(null);
           }
-        }
-      }, 200);
+        };
 
-      return () => clearInterval(detectionInterval);
+        interval = setInterval(runDetection, 200);
+      }
+
+      return () => {
+        if (interval) clearInterval(interval);
+      };
+    }, [modelsLoaded, stream, capturedImage, scanResult, users]);
+
+    const handleVideoPlay = () => {
+      // Dimensions setup only
+      if (videoRef.current && overlayCanvasRef.current) {
+        faceapi.matchDimensions(overlayCanvasRef.current, { 
+          width: videoRef.current.videoWidth, 
+          height: videoRef.current.videoHeight 
+        });
+      }
     };
 
     const getDevices = async () => {
@@ -1193,34 +1207,53 @@ export default function App() {
       }
     }, [step]);
 
+    useEffect(() => {
+      let interval: NodeJS.Timeout;
+      
+      if (modelsLoaded && stream && videoRef.current && overlayCanvasRef.current) {
+        const video = videoRef.current;
+        const canvas = overlayCanvasRef.current;
+        
+        const runDetection = async () => {
+          if (!video || video.paused || video.ended || !modelsLoaded || capturedImage) return;
+
+          // Ensure video dimensions are available
+          if (video.videoWidth === 0) return;
+
+          const displaySize = { width: video.videoWidth, height: video.videoHeight };
+          faceapi.matchDimensions(canvas, displaySize);
+
+          const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions());
+          setIsFaceDetected(detections.length > 0);
+
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const resized = faceapi.resizeResults(detections, displaySize);
+            resized.forEach(det => {
+              const { x, y, width, height } = det.box;
+              ctx.strokeStyle = '#10b981'; // emerald-500
+              ctx.lineWidth = 3;
+              ctx.strokeRect(x, y, width, height);
+            });
+          }
+        };
+
+        interval = setInterval(runDetection, 150);
+      }
+
+      return () => {
+        if (interval) clearInterval(interval);
+      };
+    }, [modelsLoaded, stream, capturedImage]);
+
     const handleVideoPlay = () => {
-      if (!videoRef.current || !overlayCanvasRef.current || !modelsLoaded) return;
-
-      const video = videoRef.current;
-      const canvas = overlayCanvasRef.current;
-      const displaySize = { width: video.videoWidth, height: video.videoHeight };
-      faceapi.matchDimensions(canvas, displaySize);
-
-      const interval = setInterval(async () => {
-        if (video.paused || video.ended || !modelsLoaded || capturedImage) return;
-
-        const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions());
-        setIsFaceDetected(detections.length > 0);
-
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          const resized = faceapi.resizeResults(detections, displaySize);
-          resized.forEach(det => {
-            const { x, y, width, height } = det.box;
-            ctx.strokeStyle = '#10b981'; // emerald-500
-            ctx.lineWidth = 3;
-            ctx.strokeRect(x, y, width, height);
-          });
-        }
-      }, 200);
-
-      return () => clearInterval(interval);
+      if (videoRef.current && overlayCanvasRef.current) {
+        faceapi.matchDimensions(overlayCanvasRef.current, { 
+          width: videoRef.current.videoWidth, 
+          height: videoRef.current.videoHeight 
+        });
+      }
     };
 
     const getDevices = async () => {
