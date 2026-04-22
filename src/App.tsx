@@ -27,8 +27,11 @@ import {
   MapPin,
   Save,
   KeyRound,
-  LogIn
+  LogIn,
+  FileDown
 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { motion, AnimatePresence } from 'motion/react';
 import * as faceapi from 'face-api.js';
 import {
@@ -47,7 +50,7 @@ import { Bar } from 'react-chartjs-2';
 const DEFAULT_SCHOOL_LAT = -7.350580;
 const DEFAULT_SCHOOL_LNG = 108.217163;
 const MAX_DISTANCE_METERS = 100;
-const ADMIN_PIN_DEFAULT = "12345";
+const DEFAULT_ADMIN_PIN = "12345";
 
 // Haversine formula to calculate distance between two coordinates in meters
 const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -91,7 +94,16 @@ interface RegisteredUser {
 }
 
 export default function App() {
+  const [isSplashActive, setIsSplashActive] = useState(true);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'absen' | 'daftar' | 'riwayat'>('dashboard');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsSplashActive(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
   const [logs, setLogs] = useState<AttendanceLog[]>(() => {
     const savedLogs = localStorage.getItem('attendflow_logs');
     return savedLogs ? JSON.parse(savedLogs) : [];
@@ -120,6 +132,15 @@ export default function App() {
   const [adminPinInput, setAdminPinInput] = useState('');
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
 
+  const [adminPin, setAdminPin] = useState<string>(() => {
+    const saved = localStorage.getItem('attendflow_admin_pin');
+    return saved || DEFAULT_ADMIN_PIN;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('attendflow_admin_pin', adminPin);
+  }, [adminPin]);
+
   const [schoolLocation, setSchoolLocation] = useState<{lat: number, lng: number}>(() => {
     const saved = localStorage.getItem('attendflow_school_location');
     return saved ? JSON.parse(saved) : { lat: DEFAULT_SCHOOL_LAT, lng: DEFAULT_SCHOOL_LNG };
@@ -137,7 +158,7 @@ export default function App() {
           <div className="bg-emerald-600 p-2 rounded-lg">
             <ShieldCheck className="text-white w-6 h-6" />
           </div>
-          <span className="font-bold text-xl tracking-tight text-emerald-900 font-sans">Attend<span className="text-emerald-600">Flow</span></span>
+          <span className="font-bold text-xl tracking-tight text-emerald-900 font-sans">AttendAI <span className="text-emerald-600">School</span></span>
         </div>
 
         {/* Desktop Menu */}
@@ -204,7 +225,7 @@ export default function App() {
             exit={{ opacity: 0, height: 0 }}
             className="md:hidden bg-white border-t border-emerald-50 overflow-hidden"
           >
-            <div className="flex flex-col p-4 gap-4">
+            <div className="flex flex-col p-6 gap-4">
               {[
                 { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
                 { id: 'absen', icon: Camera, label: 'Absen' },
@@ -217,14 +238,37 @@ export default function App() {
                     setActiveTab(item.id as any);
                     setIsMobileMenuOpen(false);
                   }}
-                  className={`flex items-center gap-3 p-3 rounded-xl ${
-                    activeTab === item.id ? 'bg-emerald-50 text-emerald-600 font-medium' : 'text-slate-600'
+                  className={`flex items-center gap-4 p-5 rounded-2xl transition-all ${
+                    activeTab === item.id ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'bg-slate-50 text-slate-600'
                   }`}
                 >
-                  <item.icon size={20} />
-                  <span>{item.label}</span>
+                  <item.icon size={24} />
+                  <span className="font-bold text-lg">{item.label}</span>
                 </button>
               ))}
+              
+              <div className="h-px bg-slate-100 my-2" />
+              
+              <button 
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  if (isAdminMode) {
+                    setIsAdminMode(false);
+                  } else {
+                    setAdminPinInput('');
+                    setAdminAuthError(null);
+                    setShowAdminAuthModal(true);
+                  }
+                }}
+                className={`flex items-center gap-4 p-5 rounded-2xl transition-all font-bold text-lg ${
+                  isAdminMode 
+                    ? 'bg-emerald-900 text-white shadow-lg' 
+                    : 'bg-slate-100 text-slate-500'
+                }`}
+              >
+                {isAdminMode ? <Lock size={24} /> : <Unlock size={24} />}
+                <span>{isAdminMode ? 'Admin Mode On' : 'Admin Mode'}</span>
+              </button>
             </div>
           </motion.div>
         )}
@@ -236,6 +280,11 @@ export default function App() {
     const [editLoc, setEditLoc] = useState({ lat: schoolLocation.lat, lng: schoolLocation.lng });
     const [isSavingLoc, setIsSavingLoc] = useState(false);
     const [isGettingCurrentLoc, setIsGettingCurrentLoc] = useState(false);
+
+    // PIN Change States
+    const [pinData, setPinData] = useState({ oldPin: '', newPin: '' });
+    const [isChangingPin, setIsChangingPin] = useState(false);
+    const [pinError, setPinError] = useState<string | null>(null);
 
     const handleSaveLocation = () => {
       setIsSavingLoc(true);
@@ -400,12 +449,13 @@ export default function App() {
         </div>
 
         {isAdminMode && (
-          <div className="bg-white p-8 rounded-3xl border border-emerald-100 shadow-sm">
-            <h2 className="text-xl font-bold text-emerald-900 mb-6 flex items-center gap-2">
-              <MapPin className="text-emerald-600" size={24} />
-              Pengaturan Lokasi GPS Sekolah
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            {/* GPS Settings */}
+            <div className="bg-white p-8 rounded-3xl border border-emerald-100 shadow-sm space-y-6">
+              <h2 className="text-xl font-bold text-emerald-900 flex items-center gap-2">
+                <MapPin className="text-emerald-600" size={24} />
+                Pengaturan Lokasi GPS
+              </h2>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -429,11 +479,11 @@ export default function App() {
                     />
                   </div>
                 </div>
-                <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex flex-col gap-3">
                   <button 
                     onClick={handleSaveLocation}
                     disabled={isSavingLoc}
-                    className="flex-1 bg-emerald-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all disabled:opacity-50"
+                    className="w-full bg-emerald-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all disabled:opacity-50"
                   >
                     {isSavingLoc ? <RefreshCcw size={18} className="animate-spin" /> : <Save size={18} />}
                     Simpan Koordinat
@@ -441,19 +491,76 @@ export default function App() {
                   <button 
                     onClick={handleSetCurrentLocation}
                     disabled={isGettingCurrentLoc}
-                    className="flex-1 bg-slate-800 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-slate-900 transition-all disabled:opacity-50"
+                    className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-slate-900 transition-all disabled:opacity-50"
                   >
                     {isGettingCurrentLoc ? <RefreshCcw size={18} className="animate-spin" /> : <MapPin size={18} />}
                     Set Lokasi Saya Sekarang
                   </button>
                 </div>
               </div>
-              <div className="bg-emerald-50/50 rounded-2xl p-5 border border-emerald-100 flex flex-col justify-center">
-                <p className="text-xs text-emerald-800 font-medium leading-relaxed">
-                  <span className="font-bold">Info:</span> Anda dapat menentukan titik pusat absensi. 
-                  Gunakan tombol <span className="font-bold italic text-emerald-900">"Set Lokasi Saya Sekarang"</span> saat meresmikan titik absensi di tengah gedung/sekolah. 
-                  Radius absensi akan dihitung 100m dari titik ini.
-                </p>
+            </div>
+
+            {/* PIN Settings */}
+            <div className="bg-white p-8 rounded-3xl border border-emerald-100 shadow-sm space-y-6">
+              <h2 className="text-xl font-bold text-emerald-900 flex items-center gap-2">
+                <KeyRound className="text-emerald-600" size={24} />
+                Keamanan PIN Admin
+              </h2>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest pl-1">PIN Lama</label>
+                  <input 
+                    type="password"
+                    placeholder="Masukkan PIN saat ini"
+                    value={pinData.oldPin}
+                    onChange={(e) => {
+                      setPinData(prev => ({ ...prev, oldPin: e.target.value }));
+                      setPinError(null);
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest pl-1">PIN Baru (Min. 5 Digit)</label>
+                  <input 
+                    type="password"
+                    placeholder="Masukkan PIN baru"
+                    value={pinData.newPin}
+                    onChange={(e) => {
+                      setPinData(prev => ({ ...prev, newPin: e.target.value }));
+                      setPinError(null);
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                
+                {pinError && <p className="text-red-500 text-[10px] font-bold pl-1 uppercase tracking-wider">{pinError}</p>}
+
+                <button 
+                  disabled={isChangingPin}
+                  onClick={() => {
+                    if (pinData.oldPin !== adminPin) {
+                      setPinError("PIN lama Anda tidak sesuai.");
+                      return;
+                    }
+                    if (pinData.newPin.length < 5) {
+                      setPinError("PIN baru minimal 5 digit.");
+                      return;
+                    }
+                    setIsChangingPin(true);
+                    setTimeout(() => {
+                      setAdminPin(pinData.newPin);
+                      setPinData({ oldPin: '', newPin: '' });
+                      setIsChangingPin(false);
+                      setTopMessage("PIN berhasil diubah!");
+                      setTimeout(() => setTopMessage(null), 3000);
+                    }, 1000);
+                  }}
+                  className="w-full bg-emerald-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all disabled:opacity-50"
+                >
+                  {isChangingPin ? <RefreshCcw size={18} className="animate-spin" /> : <Save size={18} />}
+                  Update PIN Keamanan
+                </button>
               </div>
             </div>
           </div>
@@ -503,9 +610,9 @@ export default function App() {
           </div>
           <button 
             onClick={() => setActiveTab('absen')}
-            className="relative z-10 bg-white text-emerald-900 px-6 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-emerald-50 transition-all active:scale-95 shadow-xl shadow-emerald-950/20"
+            className="relative z-10 bg-white text-emerald-900 py-5 px-6 rounded-2xl font-extrabold flex items-center justify-center gap-3 hover:bg-emerald-50 transition-all active:scale-95 shadow-xl shadow-emerald-950/20 text-lg"
           >
-            <Camera size={20} />
+            <Camera size={24} />
             Buka Kamera Absen
           </button>
           
@@ -896,7 +1003,7 @@ export default function App() {
         </div>
 
         <div className="relative group">
-          <div className="bg-black rounded-3xl overflow-hidden aspect-video relative flex items-center justify-center border-4 border-white shadow-2xl">
+          <div className="bg-black rounded-[2.5rem] overflow-hidden aspect-[3/4] md:aspect-video relative flex items-center justify-center border-4 border-white shadow-2xl">
             {cameraError ? (
               <div className="text-center p-8 bg-slate-900 w-full h-full flex flex-col items-center justify-center">
                 <CameraOff size={48} className="text-slate-500 mb-4" />
@@ -1009,34 +1116,34 @@ export default function App() {
           
           <canvas ref={canvasRef} className="hidden" />
 
-          <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-4 w-full justify-center">
+          <div className="md:absolute -bottom-10 left-1/2 md:-translate-x-1/2 flex items-center gap-4 w-full justify-center mt-6 md:mt-0">
              {stream ? (
-               <div className="flex gap-4">
+               <div className="flex flex-col sm:flex-row gap-4 w-full px-4 md:px-0 max-w-md">
                  <button 
                   disabled={isScanning || !!scanResult || !identifiedUser || isLocating || !!locationError || (distanceToSchool !== null && distanceToSchool > MAX_DISTANCE_METERS)}
                   onClick={() => capturePhoto('MASUK')}
-                  className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-8 py-4 rounded-full font-bold shadow-xl shadow-emerald-600/20 transition-all active:scale-95 flex items-center gap-2"
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white py-5 md:py-4 rounded-3xl font-bold shadow-xl shadow-emerald-600/20 transition-all active:scale-95 flex items-center justify-center gap-2 text-lg md:text-base"
                 >
                   {isScanning ? (
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  ) : <Camera size={18} />}
+                  ) : <Camera size={20} />}
                   Absen Masuk
                 </button>
                 <button 
                   disabled={isScanning || !!scanResult || !identifiedUser || isLocating || !!locationError || (distanceToSchool !== null && distanceToSchool > MAX_DISTANCE_METERS)}
                   onClick={() => capturePhoto('PULANG')}
-                  className="bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-8 py-4 rounded-full font-bold shadow-xl shadow-amber-600/20 transition-all active:scale-95 flex items-center gap-2"
+                  className="flex-1 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white py-5 md:py-4 rounded-3xl font-bold shadow-xl shadow-amber-600/20 transition-all active:scale-95 flex items-center justify-center gap-2 text-lg md:text-base"
                 >
                   {isScanning ? (
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  ) : <Camera size={18} />}
+                  ) : <Camera size={20} />}
                   Absen Pulang
                 </button>
                </div>
              ) : !cameraError && (
               <button 
                 onClick={startCamera}
-                className="bg-emerald-600 text-white px-10 py-4 rounded-full font-bold shadow-xl shadow-emerald-600/20"
+                className="w-full max-w-xs bg-emerald-600 text-white py-5 rounded-3xl font-bold shadow-xl shadow-emerald-600/20 text-lg"
               >
                 Mulai Kamera
               </button>
@@ -1284,7 +1391,7 @@ export default function App() {
               </div>
             )}
 
-            <div className="bg-slate-900 aspect-square rounded-[2rem] flex items-center justify-center text-white relative overflow-hidden ring-4 ring-slate-50 shadow-inner">
+            <div className="bg-slate-900 aspect-[3/4] md:aspect-square rounded-[2rem] flex items-center justify-center text-white relative overflow-hidden ring-4 ring-slate-50 shadow-inner">
                {cameraError ? (
                  <div className="text-center p-4">
                    <p className="text-xs text-slate-400 mb-4">{cameraError}</p>
@@ -1337,23 +1444,23 @@ export default function App() {
                   <button 
                     onClick={handleCapture}
                     disabled={isSaving}
-                    className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all"
+                    className="w-full bg-emerald-600 text-white py-5 md:py-4 rounded-3xl font-extrabold hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all text-lg md:text-base"
                   >
-                    <Camera size={20} />
+                    <Camera size={24} className="md:w-5 md:h-5" />
                     Ambil Foto Profil
                   </button>
                 ) : (
                   <button 
                     onClick={startCamera}
-                    className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all"
+                    className="w-full bg-emerald-600 text-white py-5 md:py-4 rounded-3xl font-extrabold hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all text-lg md:text-base"
                   >
-                    <Camera size={20} />
+                    <Camera size={24} className="md:w-5 md:h-5" />
                     Mulai Kamera
                   </button>
                 )
               ) : (
-                <div className="text-center py-2 text-emerald-600 font-bold flex items-center justify-center gap-2 italic">
-                  <CheckCircle2 size={20} /> Foto Berhasil Diambil
+                <div className="text-center py-4 text-emerald-600 font-bold flex items-center justify-center gap-2 italic text-lg transition-all">
+                  <CheckCircle2 size={24} /> Foto Berhasil Diambil
                 </div>
               )}
               
@@ -1395,6 +1502,44 @@ export default function App() {
       setTimeout(() => setTopMessage(null), 2000);
     };
 
+    const exportToPDF = () => {
+      const doc = new jsPDF();
+      
+      // Header
+      doc.setFontSize(22);
+      doc.setTextColor(5, 150, 105); // emerald-600
+      doc.text('AttendAI School', 14, 20);
+      
+      doc.setFontSize(14);
+      doc.setTextColor(100);
+      doc.text('Laporan Riwayat Absensi', 14, 30);
+      
+      doc.setFontSize(10);
+      doc.text(`Dicetak pada: ${new Date().toLocaleString('id-ID')}`, 14, 38);
+
+      // Table
+      const tableColumn = ["Nama Karyawan", "Waktu", "Tanggal", "Tipe"];
+      const tableRows = filteredLogs.map(log => [
+        log.name,
+        log.time,
+        log.date,
+        log.type
+      ]);
+
+      autoTable(doc, {
+        head: [tableColumn],
+        body: tableRows,
+        startY: 45,
+        theme: 'grid',
+        headStyles: { fillColor: [5, 150, 105] }, // emerald-600
+        styles: { fontSize: 9, cellPadding: 3 },
+      });
+
+      doc.save('laporan-absensi.pdf');
+      setTopMessage("PDF Berhasil diunduh!");
+      setTimeout(() => setTopMessage(null), 3000);
+    };
+
     return (
     <div className="space-y-6">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1406,33 +1551,44 @@ export default function App() {
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
           {isAdminMode && (
-            <div className="relative">
+            <div className="relative w-full sm:w-auto">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <input 
                 type="text"
                 placeholder="Cari nama karyawan..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all w-full sm:w-64"
+                className="pl-10 pr-4 py-4 md:py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all w-full sm:w-64 text-base md:text-sm"
               />
             </div>
           )}
-          <div className="flex gap-2">
-            <button 
-              onClick={refreshData}
-              className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
-              title="Refresh Data"
-            >
-              <RotateCcw size={20} />
-            </button>
-            <button 
-              onClick={clearLogs}
-              className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl text-sm font-bold hover:bg-red-100 transition-colors"
-            >
-              <X size={16} />
-              Hapus Semua
-            </button>
-          </div>
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+              {isAdminMode && filteredLogs.length > 0 && (
+                <button 
+                  onClick={exportToPDF}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-600 text-white px-5 py-4 md:py-2 rounded-xl text-base md:text-sm font-bold hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-600/10"
+                >
+                  <FileDown size={20} className="md:w-[18px] md:h-[18px]" />
+                  Export PDF
+                </button>
+              )}
+              <div className="flex gap-2 w-full sm:w-auto">
+                <button 
+                  onClick={refreshData}
+                  className="flex-1 sm:flex-none p-4 md:p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors flex items-center justify-center"
+                  title="Refresh Data"
+                >
+                  <RotateCcw size={20} />
+                </button>
+                <button 
+                  onClick={clearLogs}
+                  className="flex-[3] sm:flex-none flex items-center justify-center gap-2 bg-red-50 text-red-600 px-5 py-4 md:py-2 rounded-xl text-base md:text-sm font-bold hover:bg-red-100 transition-colors"
+                >
+                  <X size={18} className="md:w-4 md:h-4" />
+                  Hapus
+                </button>
+              </div>
+            </div>
         </div>
       </header>
 
@@ -1485,8 +1641,75 @@ export default function App() {
     );
   };
 
+  const SplashScreen = () => (
+    <motion.div 
+      initial={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.5 }}
+      className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center"
+    >
+      <motion.div
+        initial={{ scale: 0.8, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ 
+          duration: 0.8, 
+          ease: "backOut",
+          delay: 0.2
+        }}
+        className="flex flex-col items-center gap-6"
+      >
+        <div className="relative">
+          <motion.div 
+            animate={{ 
+              rotate: 360,
+              scale: [1, 1.1, 1]
+            }}
+            transition={{ 
+              rotate: { duration: 20, repeat: Infinity, ease: "linear" },
+              scale: { duration: 2, repeat: Infinity, ease: "easeInOut" }
+            }}
+            className="w-24 h-24 bg-emerald-600/10 rounded-[2rem] absolute -inset-4 blur-xl"
+          />
+          <div className="bg-emerald-600 p-6 rounded-[2rem] shadow-2xl shadow-emerald-600/20 relative z-10">
+            <ShieldCheck className="text-white w-12 h-12" />
+          </div>
+        </div>
+        
+        <div className="text-center space-y-2">
+          <h1 className="text-4xl font-black text-slate-900 tracking-tight font-sans">
+            AttendAI <span className="text-emerald-600">School</span>
+          </h1>
+          <p className="text-slate-400 font-medium tracking-[0.2em] uppercase text-xs">
+            Smart Attendance System
+          </p>
+        </div>
+
+        <div className="mt-12 flex gap-1.5">
+          {[0, 1, 2].map((i) => (
+            <motion.div
+              key={i}
+              animate={{ 
+                scale: [1, 1.5, 1],
+                opacity: [0.3, 1, 0.3]
+              }}
+              transition={{ 
+                duration: 1, 
+                repeat: Infinity, 
+                delay: i * 0.2 
+              }}
+              className="w-2 h-2 bg-emerald-600 rounded-full"
+            />
+          ))}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+
   return (
     <div className="min-h-screen bg-[#FDFDFD] text-slate-900 font-sans selection:bg-emerald-100 selection:text-emerald-900 relative">
+      <AnimatePresence>
+        {isSplashActive && <SplashScreen />}
+      </AnimatePresence>
       <AnimatePresence>
         {topMessage && (
           <motion.div 
@@ -1539,7 +1762,7 @@ export default function App() {
                     <LogIn size={20} className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input 
                       type="password"
-                      placeholder="Masukkan PIN Admin (default: 12345)"
+                      placeholder="Masukkan PIN Admin"
                       value={adminPinInput}
                       onChange={(e) => {
                         setAdminPinInput(e.target.value);
@@ -1547,7 +1770,7 @@ export default function App() {
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
-                          if (adminPinInput === ADMIN_PIN_DEFAULT) {
+                          if (adminPinInput === adminPin) {
                             setIsAdminMode(true);
                             setShowAdminAuthModal(false);
                             setTopMessage("Login Admin Berhasil!");
@@ -1566,7 +1789,7 @@ export default function App() {
                   
                   <button 
                     onClick={() => {
-                      if (adminPinInput === ADMIN_PIN_DEFAULT) {
+                      if (adminPinInput === adminPin) {
                         setIsAdminMode(true);
                         setShowAdminAuthModal(false);
                         setTopMessage("Login Admin Berhasil!");
@@ -1637,10 +1860,10 @@ export default function App() {
         <div className="flex flex-col md:flex-row justify-between items-center gap-6">
           <div className="flex items-center gap-2 opacity-40 grayscale">
             <ShieldCheck className="text-emerald-950 w-5 h-5" />
-            <span className="font-bold text-emerald-950">AttendFlow</span>
+            <span className="font-bold text-emerald-950">AttendAI School</span>
           </div>
           <p className="text-slate-400 text-xs uppercase tracking-widest font-medium">
-            &copy; 2026 attendflow attendance system • v1.0.0
+            &copy; 2026 attendai school • v1.0.0
           </p>
           <div className="flex gap-8">
             <a href="#" className="text-slate-400 hover:text-emerald-600 transition-colors text-xs font-semibold uppercase tracking-widest">Panduan</a>

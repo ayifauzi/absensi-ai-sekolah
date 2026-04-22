@@ -1,5 +1,5 @@
 {
-  "name": "AttendFlow - Sistem Absensi Wajah",
+  "name": "AttendAI School",
   "description": "Aplikasi absensi modern berbasis pengenalan wajah dengan antarmuka bersih dan responsif.",
   "requestFramePermissions": ["camera", "geolocation"],
   "majorCapabilities": []
