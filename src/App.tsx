@@ -563,6 +563,39 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* Employee Management Section (For Admin) */}
+            <div className="md:col-span-2 bg-white p-8 rounded-3xl border border-blue-100 shadow-sm space-y-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                  <Users className="text-blue-600" size={24} />
+                  Daftar Karyawan Terdaftar
+                </h2>
+                <span className="bg-blue-50 text-blue-600 px-3 py-1 rounded-full text-xs font-bold">
+                  {users.length} Orang
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {users.length > 0 ? (
+                  users.map((u) => (
+                    <div key={u.id} className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:border-blue-200 transition-colors">
+                      <div className="relative">
+                        <img src={u.image} alt={u.name} className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-sm" />
+                        <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full border-2 border-white"></div>
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-slate-800 text-sm truncate">{u.name}</h4>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest font-mono">ID: {u.id.slice(-6)}</p>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="col-span-full py-8 text-center text-slate-400 italic text-sm">
+                    Belum ada karyawan yang terdaftar.
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -1337,7 +1370,7 @@ export default function App() {
       const canvas = canvasRef.current;
       
       try {
-        // Detect face and extract descriptor
+        // ... (detection logic remains same)
         const detection = await faceapi
           .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
           .withFaceLandmarks()
@@ -1349,8 +1382,6 @@ export default function App() {
           setTimeout(() => setTopMessage(null), 3000);
           return;
         }
-
-        console.log("Face Descriptor Extraxted:", detection.descriptor);
 
         // Draw image to canvas for base64 storage
         canvas.width = video.videoWidth;
@@ -1371,13 +1402,15 @@ export default function App() {
           };
 
           setUsers(prev => [...prev, newUser]);
-          setTopMessage(`Registrasi berhasil: ${formData.name}`);
           setIsSaving(false);
+          
+          // NEW: Immediate feedback modal/overlay would be better, but let's enhance TopMessage
+          setTopMessage(`✅ Registrasi Berhasil: ${formData.name}`);
           
           setTimeout(() => {
             setActiveTab('dashboard');
             setTopMessage(null);
-          }, 2000);
+          }, 2500);
         }
       } catch (err) {
         console.error("Error during face registration:", err);
