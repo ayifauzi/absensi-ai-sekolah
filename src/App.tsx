@@ -1356,10 +1356,13 @@ export default function App() {
     };
 
     const handleCapture = async () => {
-      if (!videoRef.current || !canvasRef.current || !modelsLoaded) return;
+      if (!videoRef.current || !canvasRef.current || !modelsLoaded) {
+        console.error("Registrasi: Komponen belum siap (Video/Canvas/Model)");
+        return;
+      }
 
       if (!isFaceDetected) {
-        setTopMessage("Wajah tidak terdeteksi, tidak bisa disimpan");
+        setTopMessage("⚠️ Wajah tidak terdeteksi di kamera");
         setTimeout(() => setTopMessage(null), 3000);
         return;
       }
@@ -1369,26 +1372,42 @@ export default function App() {
       const canvas = canvasRef.current;
       
       try {
-        // ... (detection logic remains same)
+        console.log("Registrasi: Memulai ekstraksi fitur wajah...");
+        
+        // Use more sensitive options for the capture pass
+        const detectorOptions = new faceapi.TinyFaceDetectorOptions({
+          inputSize: 416, 
+          scoreThreshold: 0.3 // Lower threshold for more reliable capture
+        });
+
         const detection = await faceapi
-          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+          .detectSingleFace(video, detectorOptions)
           .withFaceLandmarks()
           .withFaceDescriptor();
 
         if (!detection) {
+          console.warn("Registrasi: AI gagal mendeteksi wajah secara detail pada frame ini.");
           setIsSaving(false);
-          setTopMessage("Gagal mengekstrak fitur wajah. Coba lagi.");
+          setTopMessage("Gagal fokus wajah. Posisikan wajah di tengah & tenang.");
           setTimeout(() => setTopMessage(null), 3000);
           return;
         }
 
-        // Draw image to canvas for base64 storage
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        console.log("Registrasi: Fitur wajah berhasil diekstrak.");
+
+        // Draw image to canvas for base64 storage - resized for space efficiency
+        const targetSize = 300;
+        canvas.width = targetSize;
+        canvas.height = targetSize;
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+          // Calculate center crop
+          const size = Math.min(video.videoWidth, video.videoHeight);
+          const xOffset = (video.videoWidth - size) / 2;
+          const yOffset = (video.videoHeight - size) / 2;
+          
+          ctx.drawImage(video, xOffset, yOffset, size, size, 0, 0, targetSize, targetSize);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
           setCapturedImage(dataUrl);
 
           // Save User
@@ -1400,11 +1419,14 @@ export default function App() {
             descriptor: Array.from(detection.descriptor)
           };
 
-          setUsers(prev => [...prev, newUser]);
-          setIsSaving(false);
+          setUsers(prev => {
+            const updated = [...prev, newUser];
+            return updated;
+          });
           
-          // NEW: Immediate feedback modal/overlay would be better, but let's enhance TopMessage
+          setIsSaving(false);
           setTopMessage(`✅ Registrasi Berhasil: ${formData.name}`);
+          console.log("Registrasi: User baru berhasil disimpan ke State & Storage.");
           
           setTimeout(() => {
             setActiveTab('dashboard');
@@ -1412,9 +1434,9 @@ export default function App() {
           }, 2500);
         }
       } catch (err) {
-        console.error("Error during face registration:", err);
+        console.error("Registrasi Error:", err);
         setIsSaving(false);
-        setTopMessage("Terjadi kesalahan saat registrasi");
+        setTopMessage("Terjadi kesalahan teknis saat registrasi");
         setTimeout(() => setTopMessage(null), 3000);
       }
     };
