@@ -105,23 +105,30 @@ export default function App() {
   }, []);
 
   const [logs, setLogs] = useState<AttendanceLog[]>(() => {
-    const savedLogs = localStorage.getItem('attendflow_logs');
+    const savedLogs = localStorage.getItem('attendai_logs');
     return savedLogs ? JSON.parse(savedLogs) : [];
   });
 
   useEffect(() => {
-    localStorage.setItem('attendflow_logs', JSON.stringify(logs));
+    localStorage.setItem('attendai_logs', JSON.stringify(logs));
   }, [logs]);
+
   const [users, setUsers] = useState<RegisteredUser[]>(() => {
-    const savedUsers = localStorage.getItem('attendflow_users');
+    const savedUsers = localStorage.getItem('attendai_users');
     const parsedUsers = savedUsers ? JSON.parse(savedUsers) : [];
     console.log("Sistem: Memuat data karyawan dari storage...", parsedUsers.length, "karyawan terdeteksi.");
     return parsedUsers;
   });
 
   useEffect(() => {
-    localStorage.setItem('attendflow_users', JSON.stringify(users));
-    console.log("Sistem: Data karyawan berhasil disinkronkan ke storage. Total saat ini:", users.length);
+    try {
+      localStorage.setItem('attendai_users', JSON.stringify(users));
+      console.log("Sistem: Data karyawan berhasil disinkronkan ke storage. Total saat ini:", users.length);
+    } catch (err) {
+      console.error("Sistem: Gagal menyimpan data ke LocalStorage!", err);
+      setTopMessage("⚠️ Gagal: Penyimpanan browser penuh!");
+      setTimeout(() => setTopMessage(null), 5000);
+    }
   }, [users]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [topMessage, setTopMessage] = useState<string | null>(null);
@@ -132,21 +139,21 @@ export default function App() {
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
 
   const [adminPin, setAdminPin] = useState<string>(() => {
-    const saved = localStorage.getItem('attendflow_admin_pin');
+    const saved = localStorage.getItem('attendai_admin_pin');
     return saved || DEFAULT_ADMIN_PIN;
   });
 
   useEffect(() => {
-    localStorage.setItem('attendflow_admin_pin', adminPin);
+    localStorage.setItem('attendai_admin_pin', adminPin);
   }, [adminPin]);
 
   const [schoolLocation, setSchoolLocation] = useState<{lat: number, lng: number}>(() => {
-    const saved = localStorage.getItem('attendflow_school_location');
+    const saved = localStorage.getItem('attendai_school_location');
     return saved ? JSON.parse(saved) : { lat: DEFAULT_SCHOOL_LAT, lng: DEFAULT_SCHOOL_LNG };
   });
 
   useEffect(() => {
-    localStorage.setItem('attendflow_school_location', JSON.stringify(schoolLocation));
+    localStorage.setItem('attendai_school_location', JSON.stringify(schoolLocation));
   }, [schoolLocation]);
 
   // Components
@@ -1362,7 +1369,8 @@ export default function App() {
       }
 
       if (!isFaceDetected) {
-        setTopMessage("⚠️ Wajah tidak terdeteksi di kamera");
+        console.warn("Registrasi Gagal: wajah tidak terdeteksi");
+        setTopMessage("⚠️ Gagal: wajah tidak terdeteksi");
         setTimeout(() => setTopMessage(null), 3000);
         return;
       }
@@ -1374,26 +1382,41 @@ export default function App() {
       try {
         console.log("Registrasi: Memulai ekstraksi fitur wajah...");
         
-        // Use more sensitive options for the capture pass
+        let detection = null;
+        let retryCount = 0;
+        const maxRetries = 3;
+
+        // Detector options
         const detectorOptions = new faceapi.TinyFaceDetectorOptions({
           inputSize: 416, 
-          scoreThreshold: 0.3 // Lower threshold for more reliable capture
+          scoreThreshold: 0.3 
         });
 
-        const detection = await faceapi
-          .detectSingleFace(video, detectorOptions)
-          .withFaceLandmarks()
-          .withFaceDescriptor();
+        // Retry loop for better stability
+        while (retryCount < maxRetries && !detection) {
+          if (retryCount > 0) {
+            console.log(`Registrasi: Mengulang ekstraksi (${retryCount}/${maxRetries})...`);
+            // Brief wait between retries
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+          
+          detection = await faceapi
+            .detectSingleFace(video, detectorOptions)
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+          
+          retryCount++;
+        }
 
         if (!detection) {
-          console.warn("Registrasi: AI gagal mendeteksi wajah secara detail pada frame ini.");
+          console.error("Registrasi Gagal: AI tetap gagal mendeteksi detail wajah setelah 3 kali percobaan.");
           setIsSaving(false);
-          setTopMessage("Gagal fokus wajah. Posisikan wajah di tengah & tenang.");
-          setTimeout(() => setTopMessage(null), 3000);
+          setTopMessage("⚠️ Gagal: Gagal mengekstrak fitur wajah. Coba posisi lain.");
+          setTimeout(() => setTopMessage(null), 4000);
           return;
         }
 
-        console.log("Registrasi: Fitur wajah berhasil diekstrak.");
+        console.log("Registrasi: Fitur wajah berhasil diekstrak.", detection.descriptor.slice(0, 5));
 
         // Draw image to canvas for base64 storage - resized for space efficiency
         const targetSize = 300;
@@ -1410,7 +1433,7 @@ export default function App() {
           const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
           setCapturedImage(dataUrl);
 
-          // Save User
+          // Create User Object
           const newUser: RegisteredUser = {
             id: Date.now().toString(),
             name: formData.name,
@@ -1419,14 +1442,12 @@ export default function App() {
             descriptor: Array.from(detection.descriptor)
           };
 
-          setUsers(prev => {
-            const updated = [...prev, newUser];
-            return updated;
-          });
+          // Functional State Update
+          setUsers(prev => [...prev, newUser]);
           
           setIsSaving(false);
-          setTopMessage(`✅ Registrasi Berhasil: ${formData.name}`);
-          console.log("Registrasi: User baru berhasil disimpan ke State & Storage.");
+          setTopMessage("✅ Registrasi berhasil");
+          console.log("Registrasi: User baru berhasil disimpan ke State.");
           
           setTimeout(() => {
             setActiveTab('dashboard');
@@ -1434,9 +1455,9 @@ export default function App() {
           }, 2500);
         }
       } catch (err) {
-        console.error("Registrasi Error:", err);
+        console.error("Registrasi: Terjadi kesalahan fatal!", err);
         setIsSaving(false);
-        setTopMessage("Terjadi kesalahan teknis saat registrasi");
+        setTopMessage("❌ Terjadi kesalahan teknis saat registrasi");
         setTimeout(() => setTopMessage(null), 3000);
       }
     };
