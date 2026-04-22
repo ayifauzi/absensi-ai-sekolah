@@ -1370,7 +1370,7 @@ export default function App() {
 
       if (!isFaceDetected) {
         console.warn("Registrasi Gagal: wajah tidak terdeteksi");
-        setTopMessage("⚠️ Gagal: wajah tidak terdeteksi");
+        setTopMessage("⚠️ Wajah tidak terdeteksi, silakan ulangi");
         setTimeout(() => setTopMessage(null), 3000);
         return;
       }
@@ -1382,49 +1382,54 @@ export default function App() {
       try {
         console.log("Registrasi: Memulai ekstraksi fitur wajah...");
         
-        let detection = null;
-        let retryCount = 0;
-        const maxRetries = 3;
-
         // Detector options
         const detectorOptions = new faceapi.TinyFaceDetectorOptions({
           inputSize: 416, 
           scoreThreshold: 0.3 
         });
 
-        // Retry loop for better stability
-        while (retryCount < maxRetries && !detection) {
+        let detectionResult = null;
+        let retryCount = 0;
+        const maxRetries = 3;
+
+        // Step 1: Detect face base ONLY to avoid Box constructor errors
+        // Step 2: If found, only then process landmarks and descriptor
+        while (retryCount < maxRetries && !detectionResult) {
           if (retryCount > 0) {
-            console.log(`Registrasi: Mengulang ekstraksi (${retryCount}/${maxRetries})...`);
-            // Brief wait between retries
+            console.log(`Registrasi: Mengulang deteksi (${retryCount}/${maxRetries})...`);
             await new Promise(resolve => setTimeout(resolve, 300));
           }
-          
-          detection = await faceapi
-            .detectSingleFace(video, detectorOptions)
-            .withFaceLandmarks()
-            .withFaceDescriptor();
+
+          // WAJIB VALIDASI: Cek deteksi dasar dulu
+          const baseDetection = await faceapi.detectSingleFace(video, detectorOptions);
+          console.log("Base Detection Result:", baseDetection);
+
+          if (baseDetection) {
+            // Jika deteksi dasar ada, baru lanjut ambil landmarks/descriptor
+            detectionResult = await faceapi
+              .detectSingleFace(video, detectorOptions)
+              .withFaceLandmarks()
+              .withFaceDescriptor();
+          }
           
           retryCount++;
         }
 
-        if (!detection) {
-          console.error("Registrasi Gagal: AI tetap gagal mendeteksi detail wajah setelah 3 kali percobaan.");
-          setIsSaving(false);
-          setTopMessage("⚠️ Gagal: Gagal mengekstrak fitur wajah. Coba posisi lain.");
+        if (!detectionResult) {
+          console.error("Registrasi Gagal: Wajah tidak dapat diekstrak fiturnya.");
+          setTopMessage("⚠️ Gagal: Wajah tidak terdeteksi, silakan ulangi");
           setTimeout(() => setTopMessage(null), 4000);
           return;
         }
 
-        console.log("Registrasi: Fitur wajah berhasil diekstrak.", detection.descriptor.slice(0, 5));
+        console.log("Descriptor Result:", detectionResult.descriptor.slice(0, 5));
 
-        // Draw image to canvas for base64 storage - resized for space efficiency
+        // Draw image to canvas - resized
         const targetSize = 300;
         canvas.width = targetSize;
         canvas.height = targetSize;
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          // Calculate center crop
           const size = Math.min(video.videoWidth, video.videoHeight);
           const xOffset = (video.videoWidth - size) / 2;
           const yOffset = (video.videoHeight - size) / 2;
@@ -1433,21 +1438,16 @@ export default function App() {
           const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
           setCapturedImage(dataUrl);
 
-          // Create User Object
           const newUser: RegisteredUser = {
             id: Date.now().toString(),
             name: formData.name,
             joinDate: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
             image: dataUrl,
-            descriptor: Array.from(detection.descriptor)
+            descriptor: Array.from(detectionResult.descriptor)
           };
 
-          // Functional State Update
           setUsers(prev => [...prev, newUser]);
-          
-          setIsSaving(false);
           setTopMessage("✅ Registrasi berhasil");
-          console.log("Registrasi: User baru berhasil disimpan ke State.");
           
           setTimeout(() => {
             setActiveTab('dashboard');
@@ -1456,9 +1456,10 @@ export default function App() {
         }
       } catch (err) {
         console.error("Registrasi: Terjadi kesalahan fatal!", err);
-        setIsSaving(false);
         setTopMessage("❌ Terjadi kesalahan teknis saat registrasi");
         setTimeout(() => setTopMessage(null), 3000);
+      } finally {
+        setIsSaving(false);
       }
     };
 
@@ -1564,8 +1565,12 @@ export default function App() {
                 stream ? (
                   <button 
                     onClick={handleCapture}
-                    disabled={isSaving}
-                    className="w-full bg-emerald-600 text-white py-5 md:py-4 rounded-3xl font-extrabold hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all text-lg md:text-base"
+                    disabled={isSaving || !isFaceDetected}
+                    className={`w-full py-5 md:py-4 rounded-3xl font-extrabold flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all text-lg md:text-base ${
+                      isFaceDetected && !isSaving 
+                        ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-600/20' 
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    }`}
                   >
                     <Camera size={24} className="md:w-5 md:h-5" />
                     Ambil Foto Profil
