@@ -19,10 +19,52 @@ import {
   Users,
   RefreshCcw,
   RotateCcw,
-  CameraOff
+  CameraOff,
+  Search,
+  Lock,
+  Unlock,
+  ShieldAlert
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as faceapi from 'face-api.js';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  ChartOptions
+} from 'chart.js';
+import { Bar } from 'react-chartjs-2';
+
+// GPS Constants
+const SCHOOL_LAT = -7.350580;
+const SCHOOL_LNG = 108.217163;
+const MAX_DISTANCE_METERS = 100;
+
+// Haversine formula to calculate distance between two coordinates in meters
+const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371e3; // Earth radius in meters
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend
+);
 
 // Types
 interface AttendanceLog {
@@ -67,6 +109,8 @@ export default function App() {
   }, [users]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [topMessage, setTopMessage] = useState<string | null>(null);
+  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Components
   const Navbar = () => (
@@ -104,6 +148,20 @@ export default function App() {
               )}
             </button>
           ))}
+          
+          <div className="h-6 w-px bg-slate-200 mx-2" />
+          
+          <button 
+            onClick={() => setIsAdminMode(!isAdminMode)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all duration-300 font-bold text-sm ${
+              isAdminMode 
+                ? 'bg-emerald-900 text-white shadow-lg shadow-emerald-950/20' 
+                : 'bg-slate-100 text-slate-500 hover:bg-emerald-50 hover:text-emerald-600'
+            }`}
+          >
+            {isAdminMode ? <Lock size={16} /> : <Unlock size={16} />}
+            {isAdminMode ? 'Admin Mode On' : 'Admin Mode'}
+          </button>
         </div>
 
         {/* Mobile Menu Toggle */}
@@ -149,44 +207,136 @@ export default function App() {
     </nav>
   );
 
-  const Dashboard = () => (
-    <div className="space-y-8">
-      <header>
-        <h1 className="text-3xl font-bold text-slate-900">Selamat Datang 👋</h1>
-        <p className="text-slate-500 mt-1">Status sistem: <span className="text-emerald-600 font-medium italic">Online & Aktif</span></p>
-      </header>
+  const Dashboard = () => {
+    // Process chart data
+    const getChartData = () => {
+      if (logs.length === 0) return null;
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
-          <div className="bg-emerald-50 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
-            <Users size={24} />
-          </div>
-          <div>
-            <p className="text-slate-500 text-sm font-medium uppercase tracking-wider">Total Karyawan</p>
-            <p className="text-4xl font-bold text-slate-900 mt-1">{users.length}</p>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
-          <div className="bg-blue-50 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-600">
-            <CheckCircle2 size={24} />
-          </div>
-          <div>
-            <p className="text-slate-500 text-sm font-medium uppercase tracking-wider">Absen Hari Ini</p>
-            <p className="text-4xl font-bold text-slate-900 mt-1">{logs.filter(l => l.date === '21 Apr 2026').length}</p>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
-          <div className="bg-amber-50 w-12 h-12 rounded-2xl flex items-center justify-center text-amber-600">
-            <Clock size={24} />
-          </div>
-          <div>
-            <p className="text-slate-500 text-sm font-medium uppercase tracking-wider">Terlambat</p>
-            <p className="text-4xl font-bold text-slate-900 mt-1">{logs.filter(l => l.status === 'Terlambat').length}</p>
-          </div>
-        </div>
-      </div>
+      // Filter only MASUK as requested
+      const clockInLogs = logs.filter(l => l.type === 'MASUK');
+      
+      // Group by date
+      const dataMap = clockInLogs.reduce((acc: Record<string, number>, log) => {
+        acc[log.date] = (acc[log.date] || 0) + 1;
+        return acc;
+      }, {});
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      // Sort dates
+      const sortedDates = Object.keys(dataMap).sort((a, b) => {
+        return new Date(a).getTime() - new Date(b).getTime();
+      });
+
+      // Take last 7 days or all if less
+      const displayDates = sortedDates.slice(-7);
+      const displayCounts = displayDates.map(date => dataMap[date]);
+
+      return {
+        labels: displayDates,
+        datasets: [
+          {
+            label: 'Jumlah Kehadiran',
+            data: displayCounts,
+            backgroundColor: 'rgba(16, 185, 129, 0.6)', // emerald-500 with opacity
+            borderColor: 'rgb(16, 185, 129)',
+            borderWidth: 2,
+            borderRadius: 8,
+          },
+        ],
+      };
+    };
+
+    const chartData = getChartData();
+    const chartOptions: ChartOptions<'bar'> = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: false,
+        },
+        tooltip: {
+          backgroundColor: '#064e3b', // emerald-900
+          padding: 12,
+          displayColors: false,
+        },
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          grid: {
+            display: false,
+          },
+          ticks: {
+            stepSize: 1,
+            color: '#94a3b8',
+          },
+        },
+        x: {
+          grid: {
+            display: false,
+          },
+          ticks: {
+            color: '#94a3b8',
+          },
+        },
+      },
+    };
+
+    return (
+      <div className="space-y-8">
+        <header>
+          <h1 className="text-3xl font-bold text-slate-900">Selamat Datang 👋</h1>
+          <p className="text-slate-500 mt-1">Status sistem: <span className="text-emerald-600 font-medium italic">Online & Aktif</span></p>
+        </header>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
+            <div className="bg-emerald-50 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
+              <Users size={24} />
+            </div>
+            <div>
+              <p className="text-slate-500 text-sm font-medium uppercase tracking-wider">Total Karyawan</p>
+              <p className="text-4xl font-bold text-slate-900 mt-1">{users.length}</p>
+            </div>
+          </div>
+          <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
+            <div className="bg-blue-50 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-600">
+              <CheckCircle2 size={24} />
+            </div>
+            <div>
+              <p className="text-slate-500 text-sm font-medium uppercase tracking-wider">Absen Hari Ini</p>
+              <p className="text-4xl font-bold text-slate-900 mt-1">{logs.filter(l => l.date === new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })).length}</p>
+            </div>
+          </div>
+          <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
+            <div className="bg-amber-50 w-12 h-12 rounded-2xl flex items-center justify-center text-amber-600">
+              <Clock size={24} />
+            </div>
+            <div>
+              <p className="text-slate-500 text-sm font-medium uppercase tracking-wider">Terlambat</p>
+              <p className="text-4xl font-bold text-slate-900 mt-1">{logs.filter(l => l.status === 'Terlambat').length}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Chart Section */}
+        <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
+          <h2 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+            <LayoutDashboard className="text-emerald-600" size={24} />
+            Tren Kehadiran
+          </h2>
+          <div className="h-[300px] w-full flex items-center justify-center">
+            {chartData ? (
+              <Bar data={chartData} options={chartOptions} />
+            ) : (
+              <div className="flex flex-col items-center gap-3 text-slate-400">
+                <LayoutDashboard size={48} className="opacity-20" />
+                <p className="font-medium italic">Belum ada data absensi untuk ditampilkan</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
           <h2 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2">
             <History className="text-emerald-600" size={24} />
@@ -242,7 +392,8 @@ export default function App() {
         </div>
       </div>
     </div>
-  );
+    );
+  };
 
   const Absen = () => {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -259,6 +410,42 @@ export default function App() {
     const [isFaceDetected, setIsFaceDetected] = useState(false);
     const [loadingModelsError, setLoadingModelsError] = useState<string | null>(null);
     const [identifiedUser, setIdentifiedUser] = useState<RegisteredUser | null>(null);
+    
+    // GPS State
+    const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
+    const [distanceToSchool, setDistanceToSchool] = useState<number | null>(null);
+    const [isLocating, setIsLocating] = useState(false);
+    const [locationError, setLocationError] = useState<string | null>(null);
+
+    const getGPSLocation = () => {
+      if (!navigator.geolocation) {
+        setLocationError("Browser tidak mendukung geolokasi");
+        return;
+      }
+
+      setIsLocating(true);
+      setLocationError(null);
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserLocation({ lat: latitude, lng: longitude });
+          const dist = calculateDistance(latitude, longitude, SCHOOL_LAT, SCHOOL_LNG);
+          setDistanceToSchool(dist);
+          setIsLocating(false);
+        },
+        (err) => {
+          console.error("Geolocation error:", err);
+          setIsLocating(false);
+          let errMsg = "Gagal mengambil lokasi.";
+          if (err.code === 1) errMsg = "Izin lokasi ditolak. Absensi tidak dapat dilanjutkan.";
+          else if (err.code === 2) errMsg = "Lokasi tidak tersedia.";
+          else if (err.code === 3) errMsg = "Timeout mengambil lokasi.";
+          setLocationError(errMsg);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    };
 
     const loadModels = async () => {
       try {
@@ -277,6 +464,7 @@ export default function App() {
 
     useEffect(() => {
       loadModels();
+      getGPSLocation(); // Fetch location on mount
     }, []);
 
     const handleVideoPlay = () => {
@@ -518,6 +706,72 @@ export default function App() {
           </div>
         )}
 
+        {/* GPS Status Card */}
+        <div className={`p-5 rounded-3xl border transition-all ${
+          locationError 
+            ? 'bg-red-50 border-red-100 text-red-700' 
+            : (distanceToSchool !== null && distanceToSchool <= MAX_DISTANCE_METERS)
+              ? 'bg-emerald-50 border-emerald-100 text-emerald-800'
+              : 'bg-slate-50 border-slate-200 text-slate-600'
+        }`}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className={`p-2 rounded-xl ${
+                locationError ? 'bg-red-100' : 'bg-white'
+              }`}>
+                {isLocating ? (
+                  <RefreshCcw className="w-4 h-4 animate-spin text-emerald-600" />
+                ) : (
+                  <ShieldCheck className={`w-4 h-4 ${locationError ? 'text-red-500' : 'text-emerald-600'}`} />
+                )}
+              </div>
+              <h4 className="font-bold text-sm tracking-tight">Validasi Lokasi GPS</h4>
+            </div>
+            <button 
+              onClick={getGPSLocation}
+              disabled={isLocating}
+              className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 hover:bg-white px-2 py-1 rounded transition-colors"
+            >
+              Refresh Lokasi
+            </button>
+          </div>
+
+          {isLocating ? (
+            <p className="text-xs italic animate-pulse">Sedang mengambil koordinat GPS...</p>
+          ) : locationError ? (
+            <p className="text-xs font-medium">{locationError}</p>
+          ) : userLocation ? (
+            <div className="space-y-2">
+              <div className="flex justify-between items-end">
+                <div>
+                  <p className="text-[10px] uppercase font-bold text-slate-400 tracking-widest">Koordinat Saya</p>
+                  <p className="font-mono text-xs">{userLocation.lat.toFixed(6)}, {userLocation.lng.toFixed(6)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] uppercase font-bold text-slate-400 tracking-widest">Jarak ke Sekolah</p>
+                  <p className="font-mono text-xs">{distanceToSchool?.toFixed(1)} meter</p>
+                </div>
+              </div>
+              
+              <div className="pt-2 border-t border-emerald-100/30">
+                {distanceToSchool !== null && distanceToSchool <= MAX_DISTANCE_METERS ? (
+                  <div className="flex items-center gap-2 text-emerald-600 font-bold text-sm">
+                    <CheckCircle2 size={16} />
+                    <span>Dalam area sekolah</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-red-500 font-bold text-sm">
+                    <X size={16} />
+                    <span>Anda berada di luar area sekolah</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs italic">Menunggu data lokasi...</p>
+          )}
+        </div>
+
         <div className="relative group">
           <div className="bg-black rounded-3xl overflow-hidden aspect-video relative flex items-center justify-center border-4 border-white shadow-2xl">
             {cameraError ? (
@@ -636,7 +890,7 @@ export default function App() {
              {stream ? (
                <div className="flex gap-4">
                  <button 
-                  disabled={isScanning || !!scanResult || !identifiedUser}
+                  disabled={isScanning || !!scanResult || !identifiedUser || isLocating || !!locationError || (distanceToSchool !== null && distanceToSchool > MAX_DISTANCE_METERS)}
                   onClick={() => capturePhoto('MASUK')}
                   className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-8 py-4 rounded-full font-bold shadow-xl shadow-emerald-600/20 transition-all active:scale-95 flex items-center gap-2"
                 >
@@ -646,7 +900,7 @@ export default function App() {
                   Absen Masuk
                 </button>
                 <button 
-                  disabled={isScanning || !!scanResult || !identifiedUser}
+                  disabled={isScanning || !!scanResult || !identifiedUser || isLocating || !!locationError || (distanceToSchool !== null && distanceToSchool > MAX_DISTANCE_METERS)}
                   onClick={() => capturePhoto('PULANG')}
                   className="bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-8 py-4 rounded-full font-bold shadow-xl shadow-amber-600/20 transition-all active:scale-95 flex items-center gap-2"
                 >
@@ -999,7 +1253,9 @@ export default function App() {
   };
 
   const Riwayat = () => {
-    const sortedLogs = [...logs].sort((a, b) => b.timestamp - a.timestamp);
+    const filteredLogs = logs
+      .filter(log => log.name.toLowerCase().includes(searchQuery.toLowerCase()))
+      .sort((a, b) => b.timestamp - a.timestamp);
 
     const clearLogs = () => {
       if (confirm("Hapus semua riwayat absensi?")) {
@@ -1021,23 +1277,39 @@ export default function App() {
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 font-sans">Riwayat Absensi</h1>
-          <p className="text-slate-500 mt-1 italic">Log lengkap aktivitas absensi</p>
+          <p className="text-slate-500 mt-1 italic">
+            {isAdminMode ? `Ditemukan ${filteredLogs.length} data absensi` : 'Log lengkap aktivitas absensi'}
+          </p>
         </div>
-        <div className="flex gap-3">
-          <button 
-            onClick={refreshData}
-            className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
-            title="Refresh Data"
-          >
-            <RotateCcw size={20} />
-          </button>
-          <button 
-            onClick={clearLogs}
-            className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl text-sm font-bold hover:bg-red-100 transition-colors"
-          >
-            <X size={16} />
-            Hapus Semua
-          </button>
+        <div className="flex flex-col sm:flex-row gap-3">
+          {isAdminMode && (
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input 
+                type="text"
+                placeholder="Cari nama karyawan..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all w-full sm:w-64"
+              />
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button 
+              onClick={refreshData}
+              className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
+              title="Refresh Data"
+            >
+              <RotateCcw size={20} />
+            </button>
+            <button 
+              onClick={clearLogs}
+              className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl text-sm font-bold hover:bg-red-100 transition-colors"
+            >
+              <X size={16} />
+              Hapus Semua
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1053,8 +1325,8 @@ export default function App() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {sortedLogs.length > 0 ? (
-                sortedLogs.map((log) => (
+              {filteredLogs.length > 0 ? (
+                filteredLogs.map((log) => (
                   <tr key={log.id} className="hover:bg-slate-50/50 transition-colors cursor-default">
                     <td className="px-8 py-5">
                       <div className="flex items-center gap-3">
@@ -1077,7 +1349,9 @@ export default function App() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={4} className="px-8 py-12 text-center text-slate-400 italic">Belum ada data absensi</td>
+                  <td colSpan={4} className="px-8 py-12 text-center text-slate-400 italic">
+                    {searchQuery ? `Tidak ada hasil untuk "${searchQuery}"` : 'Belum ada data absensi'}
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -1105,6 +1379,36 @@ export default function App() {
       </AnimatePresence>
       <Navbar />
       
+      <AnimatePresence>
+        {isAdminMode && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-emerald-900 border-b border-emerald-800 overflow-hidden"
+          >
+            <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between text-white">
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-500 p-1.5 rounded-lg animate-pulse">
+                  <ShieldAlert size={18} className="text-white" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm tracking-wide">ADMIN MODE AKTIF</p>
+                  <p className="text-[10px] text-emerald-200 uppercase font-medium">Hak akses penuh ke seluruh repositori data</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsAdminMode(false)}
+                className="flex items-center gap-2 bg-emerald-800 hover:bg-emerald-700 px-4 py-2 rounded-xl text-xs font-bold transition-all border border-emerald-700"
+              >
+                <X size={14} />
+                KELUAR ADMIN
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <main className="max-w-7xl mx-auto px-4 py-10 md:py-16">
         <AnimatePresence mode="wait">
           <motion.div
