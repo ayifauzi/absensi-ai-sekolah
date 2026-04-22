@@ -114,15 +114,14 @@ export default function App() {
   }, [logs]);
   const [users, setUsers] = useState<RegisteredUser[]>(() => {
     const savedUsers = localStorage.getItem('attendflow_users');
-    return savedUsers ? JSON.parse(savedUsers) : [
-      { id: '1', name: 'Budi Santoso', joinDate: '10 Jan 2026' },
-      { id: '2', name: 'Siti Aminah', joinDate: '12 Feb 2026' },
-      { id: '3', name: 'Andi Wijaya', joinDate: '05 Mar 2026' },
-    ];
+    const parsedUsers = savedUsers ? JSON.parse(savedUsers) : [];
+    console.log("Sistem: Memuat data karyawan dari storage...", parsedUsers.length, "karyawan terdeteksi.");
+    return parsedUsers;
   });
 
   useEffect(() => {
     localStorage.setItem('attendflow_users', JSON.stringify(users));
+    console.log("Sistem: Data karyawan berhasil disinkronkan ke storage. Total saat ini:", users.length);
   }, [users]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [topMessage, setTopMessage] = useState<string | null>(null);
