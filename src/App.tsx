@@ -27,6 +27,7 @@ import {
   MapPin,
   Save,
   KeyRound,
+  Trash2,
   LogIn,
   FileDown
 } from 'lucide-react';
@@ -363,6 +364,14 @@ export default function App() {
       };
     };
 
+    const handleDeleteUser = (id: string, name: string) => {
+      if (confirm(`Hapus karyawan ${name}?`)) {
+        setUsers(prev => prev.filter(u => u.id !== id));
+        setTopMessage(`Karyawan ${name} berhasil dihapus.`);
+        setTimeout(() => setTopMessage(null), 3000);
+      }
+    };
+
     const chartData = getChartData();
     const chartOptions: ChartOptions<'bar'> = {
       responsive: true,
@@ -589,10 +598,17 @@ export default function App() {
                         <img src={u.image} alt={u.name} className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-sm" />
                         <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full border-2 border-white"></div>
                       </div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <h4 className="font-bold text-slate-800 text-sm truncate">{u.name}</h4>
                         <p className="text-[10px] text-slate-400 uppercase tracking-widest font-mono">ID: {u.id.slice(-6)}</p>
                       </div>
+                      <button 
+                        onClick={() => handleDeleteUser(u.id, u.name)}
+                        className="p-2 text-slate-300 hover:text-red-500 transition-colors"
+                        title="Hapus Karyawan"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   ))
                 ) : (
@@ -1275,7 +1291,13 @@ export default function App() {
           const displaySize = { width: video.videoWidth, height: video.videoHeight };
           faceapi.matchDimensions(canvas, displaySize);
 
-          const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions());
+          // Consistent detector options
+          const detectorOptions = new faceapi.TinyFaceDetectorOptions({
+            inputSize: 320, // Faster but reliable enough
+            scoreThreshold: 0.3 
+          });
+
+          const detections = await faceapi.detectAllFaces(video, detectorOptions);
           setIsFaceDetected(detections.length > 0);
 
           const ctx = canvas.getContext('2d');
@@ -1382,9 +1404,9 @@ export default function App() {
       try {
         console.log("Registrasi: Memulai ekstraksi fitur wajah...");
         
-        // Detector options
+        // Consistent detector options with UI loop
         const detectorOptions = new faceapi.TinyFaceDetectorOptions({
-          inputSize: 416, 
+          inputSize: 320, 
           scoreThreshold: 0.3 
         });
 
@@ -1392,32 +1414,25 @@ export default function App() {
         let retryCount = 0;
         const maxRetries = 3;
 
-        // Step 1: Detect face base ONLY to avoid Box constructor errors
-        // Step 2: If found, only then process landmarks and descriptor
+        // Perform single-pass thorough detection with retries
         while (retryCount < maxRetries && !detectionResult) {
           if (retryCount > 0) {
             console.log(`Registrasi: Mengulang deteksi (${retryCount}/${maxRetries})...`);
-            await new Promise(resolve => setTimeout(resolve, 300));
+            await new Promise(resolve => setTimeout(resolve, 400));
           }
 
-          // WAJIB VALIDASI: Cek deteksi dasar dulu
-          const baseDetection = await faceapi.detectSingleFace(video, detectorOptions);
-          console.log("Base Detection Result:", baseDetection);
+          // Single full call: Box + Landmarks + Descriptor
+          detectionResult = await faceapi
+            .detectSingleFace(video, detectorOptions)
+            .withFaceLandmarks()
+            .withFaceDescriptor();
 
-          if (baseDetection) {
-            // Jika deteksi dasar ada, baru lanjut ambil landmarks/descriptor
-            detectionResult = await faceapi
-              .detectSingleFace(video, detectorOptions)
-              .withFaceLandmarks()
-              .withFaceDescriptor();
-          }
-          
           retryCount++;
         }
 
         if (!detectionResult) {
-          console.error("Registrasi Gagal: Wajah tidak dapat diekstrak fiturnya.");
-          setTopMessage("⚠️ Gagal: Wajah tidak terdeteksi, silakan ulangi");
+          console.error("Registrasi Gagal: Deteksi lengkap (Landmarks/Descriptor) tidak ditemukan.");
+          setTopMessage("⚠️ Gagal: Pastikan wajah jelas dan tidak banyak bergerak");
           setTimeout(() => setTopMessage(null), 4000);
           return;
         }
